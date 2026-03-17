@@ -1,31 +1,28 @@
 /**
- * Colourful Attraction - Multi-Attractor Edition
+ * Colourful Attraction - Multi-Attractor Edition (Block Particles)
  *
- * Six distinct strange attractors rendered with 500,000 GPU particles.
- * Every ~25 seconds the sketch cross-fades to the next attractor by
- * blending the two velocity fields on the GPU, so particles organically
- * morph from one shape into the next without any discontinuity.
+ * Six distinct strange attractors rendered with 100,000 GPU particles,
+ * each drawn as a tiny solid white square billboard.
  *
- * Press any key to save a screenshot.
+ * Controls:
+ *   Left-drag        Orbit (rotate around the attractor)
+ *   Right-drag       Pan
+ *   Shift + drag     Pan (alternative)
+ *   Scroll wheel     Zoom in / out
+ *   Spacebar         Cross-fade to next attractor (loops)
+ *   S                Save screenshot
  */
 
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
-const N         = 500000;
+const N         = 100000;
 const FB_WIDE   = 1024;
 const FB_HIGH   = Math.ceil(N / FB_WIDE);
 
-// How long (frames at ~60 fps) to hold each attractor before fading
-const HOLD_FRAMES  = 60 * 25;  // 25 s dwell
-const BLEND_FRAMES = 60 * 8;   //  8 s cross-fade
+const BLEND_FRAMES = 60 * 8;   // 8 s cross-fade
 
-/**
- * b controls damping/contraction.
- * Each attractor oscillates: b = base + amp * sin(TAU * t / period)
- * Format: [base, amplitude, period_in_seconds]
- */
 const B_PARAMS = [
   [0.17, 0.050, 37.0],   // 0  Halvorsen Web
   [0.16, 0.050, 41.0],   // 1  Cosine Bloom
@@ -44,6 +41,18 @@ const ATTRACTOR_NAMES = [
   'Harmonic Overtones',
 ];
 
+const BLOCK_SIZE = 0.008;
+
+// ---------------------------------------------------------------------------
+// Camera state (arcball orbit + pan + zoom)
+// ---------------------------------------------------------------------------
+
+let camRotX   = 0.5;     // pitch
+let camRotY   = 0.0;     // yaw
+let camDist   = 3.0;     // zoom distance from look-at point
+let panX      = 0.0;     // horizontal pan offset
+let panY      = 0.0;     // vertical pan offset
+
 // ---------------------------------------------------------------------------
 // Runtime state
 // ---------------------------------------------------------------------------
@@ -53,13 +62,12 @@ let updateShdr, drawShdr;
 
 let currentType   = 0;
 let nextType      = 1;
-let blendProgress = 0;    // 0 = fully currentType, 1 = fully nextType
-let holdTimer     = 0;
+let blendProgress = 0;
 let isBlending    = false;
 let b             = 0.17;
 let hudOpacity    = 0;
+let hudTimer      = 0;
 
-// Cached DOM handles
 let hudEl, hudNameEl, hudIndexEl;
 
 // ---------------------------------------------------------------------------
@@ -77,7 +85,6 @@ function lerpN(a, b, t) {
 
 // ---------------------------------------------------------------------------
 // GLSL: Update pass
-// Advances every particle one step along the blended velocity field.
 // ---------------------------------------------------------------------------
 
 const vsUpdate = `#version 300 es
@@ -99,47 +106,12 @@ uniform float blend;
 
 out vec4 fragColor;
 
-// 0  Halvorsen Web -------------------------------------------------------
-// Classic cyclic-sin map with 3-fold rotational symmetry.
-// Produces an interlocking web of curved filaments.
-vec3 vel0(vec3 p, float b) {
-  return sin(p.yzx) - b * p;
-}
-
-// 1  Cosine Bloom --------------------------------------------------------
-// A pi/2 phase shift completely changes the fixed-point topology,
-// opening up rounder, petal-like lobes.
-vec3 vel1(vec3 p, float b) {
-  return cos(p.yzx) - b * p;
-}
-
-// 2  Anisotropic Veil ----------------------------------------------------
-// Different forcing frequencies per axis stretch the attractor
-// asymmetrically into elongated, draped curtain-like forms.
-vec3 vel2(vec3 p, float b) {
-  return sin(p.yzx * vec3(1.0, 1.7, 0.6)) - b * p;
-}
-
-// 3  Modulated Lattice ---------------------------------------------------
-// A cosine envelope multiplies the base field, creating nested
-// shells of density with alternating bright and void bands.
-vec3 vel3(vec3 p, float b) {
-  return sin(p.yzx) * (1.0 + 0.5 * cos(p.zxy)) - b * p;
-}
-
-// 4  Nested Resonance ----------------------------------------------------
-// Frequency modulation: the sin argument is itself warped by a second
-// sin, producing intricate braided and knotted structures.
-vec3 vel4(vec3 p, float b) {
-  return sin(p.yzx + 0.8 * sin(p.zxy)) - b * p;
-}
-
-// 5  Harmonic Overtones --------------------------------------------------
-// Fundamental plus a phase-offset second harmonic. The interference
-// pattern adds finer internal structure without breaking global form.
-vec3 vel5(vec3 p, float b) {
-  return 0.7 * sin(p.yzx) + 0.4 * sin(2.0 * p.yzx + 1.0) - b * p;
-}
+vec3 vel0(vec3 p, float b) { return sin(p.yzx) - b * p; }
+vec3 vel1(vec3 p, float b) { return cos(p.yzx) - b * p; }
+vec3 vel2(vec3 p, float b) { return sin(p.yzx * vec3(1.0, 1.7, 0.6)) - b * p; }
+vec3 vel3(vec3 p, float b) { return sin(p.yzx) * (1.0 + 0.5 * cos(p.zxy)) - b * p; }
+vec3 vel4(vec3 p, float b) { return sin(p.yzx + 0.8 * sin(p.zxy)) - b * p; }
+vec3 vel5(vec3 p, float b) { return 0.7 * sin(p.yzx) + 0.4 * sin(2.0 * p.yzx + 1.0) - b * p; }
 
 vec3 vel(int t, vec3 p, float b) {
   if      (t == 0) return vel0(p, b);
@@ -161,42 +133,47 @@ void main() {
 `;
 
 // ---------------------------------------------------------------------------
-// GLSL: Draw pass
-// Renders a coloured line segment per particle between old and new position.
+// GLSL: Draw pass (block billboards)
 // ---------------------------------------------------------------------------
 
 const vsDraw = `#version 300 es
 precision highp float;
 precision highp int;
 
-uniform mat4 uModelViewMatrix;
-uniform mat4 uProjectionMatrix;
-uniform sampler2D dataA;
-uniform sampler2D dataB;
-uniform int   N;
+uniform mat4  uModelViewMatrix;
+uniform mat4  uProjectionMatrix;
+uniform sampler2D posData;
 uniform float b;
+uniform float blockSize;
 
 out vec4 vColor;
 
-vec3 hsb2rgb(in vec3 c) {
-  vec3 rgb = clamp(abs(mod(c.x*6.0+vec3(0.0,4.0,2.0), 6.0)-3.0)-1.0, 0.0, 1.0);
-  rgb = rgb * rgb * (3.0 - 2.0*rgb);
-  return c.z * mix(vec3(1.0), rgb, c.y);
-}
+const vec2 OFFSETS[6] = vec2[6](
+  vec2(-1.0, -1.0), vec2( 1.0, -1.0), vec2( 1.0,  1.0),
+  vec2(-1.0, -1.0), vec2( 1.0,  1.0), vec2(-1.0,  1.0)
+);
 
 void main() {
-  ivec2 res = textureSize(dataA, 0);
-  int   idx = gl_VertexID / 2;
-  ivec2 ij  = ivec2(idx % res.x, idx / res.x);
-  vec4 p0   = texelFetch(dataA, ij, 0);
-  vec4 p1   = texelFetch(dataB, ij, 0);
-  vec4 p    = ((gl_VertexID & 1) > 0) ? p0 : p1;
-  p.xyz    *= 1.6 * b;
-  p         = uModelViewMatrix * p;
-  gl_Position = uProjectionMatrix * p;
-  float u = float(gl_VertexID) / float(N);
-  vec3 c  = hsb2rgb(vec3(u, 0.7, pow(clamp((4.5 + p.z) / 2.5, 0.0, 1.0), 1.0)));
-  vColor  = vec4(c, 1.0);
+  int particleIdx = gl_VertexID / 6;
+  int cornerIdx   = gl_VertexID % 6;
+
+  ivec2 res = textureSize(posData, 0);
+  ivec2 ij  = ivec2(particleIdx % res.x, particleIdx / res.x);
+  vec4  p   = texelFetch(posData, ij, 0);
+
+  p.xyz *= 1.6 * b;
+
+  vec4 viewPos = uModelViewMatrix * p;
+
+  vec2 off  = OFFSETS[cornerIdx] * blockSize;
+  viewPos.x += off.x;
+  viewPos.y += off.y;
+
+  gl_Position = uProjectionMatrix * viewPos;
+
+  float depth = clamp((4.5 + viewPos.z) / 2.5, 0.0, 1.0);
+  float lum   = pow(depth, 0.8);
+  vColor = vec4(vec3(lum), 1.0);
 }
 `;
 
@@ -212,7 +189,7 @@ void main() { fragColor = vColor; }
 // ---------------------------------------------------------------------------
 
 function setup() {
-  createCanvas(windowHeight * 4 / 3, windowHeight, WEBGL);
+  createCanvas(windowWidth, windowHeight, WEBGL);
 
   updateShdr = createShader(vsUpdate, fsUpdate);
   drawShdr   = createShader(vsDraw, fsDraw);
@@ -224,7 +201,6 @@ function setup() {
   oldPos = createFramebuffer(fbOptions);
   newPos = createFramebuffer(fbOptions);
 
-  // Seed: xy random in [-1, 1], z encodes normalised particle index for hue
   oldPos.loadPixels();
   for (let i = 0; i < N; i++) {
     oldPos.pixels[4*i    ] = random(-1, 1);
@@ -234,43 +210,116 @@ function setup() {
   }
   oldPos.updatePixels();
 
-  // Cache DOM handles
   hudEl      = document.getElementById('hud');
   hudNameEl  = document.getElementById('hud-name');
   hudIndexEl = document.getElementById('hud-index');
-  updateHUD(currentType);
+  showHUD(currentType);
+
+  // Prevent context menu on right-click so right-drag pans
+  let cnv = document.querySelector('canvas');
+  cnv.addEventListener('contextmenu', e => e.preventDefault());
+
+  // Wheel zoom (intercept to prevent page scroll)
+  cnv.addEventListener('wheel', handleWheel, { passive: false });
 }
 
 function windowResized() {
-  resizeCanvas(windowHeight * 4 / 3, windowHeight);
+  resizeCanvas(windowWidth, windowHeight);
 }
+
+// ---------------------------------------------------------------------------
+// Mouse: orbit + pan
+// ---------------------------------------------------------------------------
+
+function mouseDragged() {
+  let dx = mouseX - pmouseX;
+  let dy = mouseY - pmouseY;
+
+  if (mouseButton === LEFT && !keyIsDown(SHIFT)) {
+    // Orbit
+    camRotY += dx * 0.007;
+    camRotX += dy * 0.007;
+    camRotX = constrain(camRotX, -HALF_PI * 0.95, HALF_PI * 0.95);
+  } else {
+    // Pan (right-drag or shift+left-drag)
+    let factor = camDist * 0.001;
+    panX -= dx * factor;
+    panY += dy * factor;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Wheel: zoom
+// ---------------------------------------------------------------------------
+
+function handleWheel(e) {
+  e.preventDefault();
+  if (e.ctrlKey) {
+    camDist *= 1 + e.deltaY * 0.01;
+  } else {
+    camDist *= 1 + e.deltaY * 0.002;
+  }
+  camDist = constrain(camDist, 0.5, 20.0);
+}
+
+function mouseWheel() {}
+
+// ---------------------------------------------------------------------------
+// Keyboard: spacebar = next attractor, S = screenshot
+// ---------------------------------------------------------------------------
+
+function keyPressed() {
+  if (key === ' ') {
+    if (!isBlending) {
+      nextType = (currentType + 1) % B_PARAMS.length;
+      isBlending    = true;
+      blendProgress = 0;
+    }
+    return false; // prevent page scroll
+  }
+  if (key === 's' || key === 'S') {
+    const ts = `${month()}-${day()}_${hour()}-${minute()}-${second()}`;
+    save(`img_${ts}.jpg`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// HUD helpers
+// ---------------------------------------------------------------------------
+
+function showHUD(idx) {
+  hudTimer = 0;
+  updateHUD(idx);
+}
+
+function updateHUD(idx) {
+  if (!hudEl) return;
+  if (hudNameEl)  hudNameEl.textContent  = ATTRACTOR_NAMES[idx];
+  if (hudIndexEl) hudIndexEl.textContent = `${idx + 1} / ${B_PARAMS.length}`;
+  hudEl.style.opacity = hudOpacity;
+}
+
+// ---------------------------------------------------------------------------
+// Draw loop
+// ---------------------------------------------------------------------------
 
 function draw() {
   const t = frameCount / 60.0;
 
-  // --- Attractor sequencing -------------------------------------------
-  holdTimer++;
-
-  if (!isBlending && holdTimer >= HOLD_FRAMES) {
-    isBlending    = true;
-    blendProgress = 0;
-  }
-
+  // --- Blend sequencing (triggered by spacebar) ---------------------------
   if (isBlending) {
     blendProgress += 1.0 / BLEND_FRAMES;
     if (blendProgress >= 1.0) {
-      // Blend complete: advance the sequence
       currentType   = nextType;
-      nextType      = (nextType + 1) % B_PARAMS.length;
       isBlending    = false;
-      holdTimer     = 0;
-      blendProgress = 0;   // reset so sm=0 means "fully currentType"
+      blendProgress = 0;
+      showHUD(currentType);
     }
   }
 
-  const sm = sstep(blendProgress);   // smooth blend factor for GPU
+  const sm = sstep(blendProgress);
 
-  // --- Blended b ----------------------------------------------------------
+  // --- b parameter (oscillates within current attractor) ------------------
   const [bA0, bA1, bA2] = B_PARAMS[currentType];
   const [bB0, bB1, bB2] = B_PARAMS[nextType];
   const bBase = lerpN(bA0, bB0, sm);
@@ -278,15 +327,14 @@ function draw() {
   const bPer  = lerpN(bA2, bB2, sm);
   b = bBase + bAmp * Math.sin(TAU * t / bPer);
 
-  // --- HUD: fade in for first 3 s of each dwell, then fade out ------------
-  if (!isBlending) {
-    if      (holdTimer <  60)  hudOpacity = holdTimer / 60;
-    else if (holdTimer < 180)  hudOpacity = 1;
-    else if (holdTimer < 240)  hudOpacity = 1 - (holdTimer - 180) / 60;
-    else                       hudOpacity = 0;
-  } else {
-    hudOpacity = Math.max(0, hudOpacity - 0.025);
-  }
+  // --- HUD fade: show ~4 s then fade out ---------------------------------
+  hudTimer++;
+  if      (hudTimer <  60)  hudOpacity = hudTimer / 60;
+  else if (hudTimer < 180)  hudOpacity = 1;
+  else if (hudTimer < 240)  hudOpacity = 1 - (hudTimer - 180) / 60;
+  else                       hudOpacity = 0;
+
+  if (isBlending) hudOpacity = Math.max(0, hudOpacity - 0.03);
   updateHUD(currentType);
 
   // --- GPU update pass ----------------------------------------------------
@@ -304,50 +352,32 @@ function draw() {
   updateShdr.unbindShader();
   newPos.end();
 
-  // --- Draw pass ----------------------------------------------------------
-  camera(0, 0, -3,  0, 0.1, 0,  0, 1, 0);
-  perspective(PI / 3, width / height, 1, 10);
-  rotateX(0.5);
-  rotateY(TAU * 0.05 * t);
+  // --- Draw pass with manual arcball camera -------------------------------
+  let eyeX = panX + camDist * Math.sin(camRotY) * Math.cos(camRotX);
+  let eyeY = panY + camDist * Math.sin(camRotX);
+  let eyeZ =        camDist * Math.cos(camRotY) * Math.cos(camRotX);
+
+  camera(eyeX, eyeY, eyeZ,  panX, panY, 0,  0, 1, 0);
+  perspective(PI / 3, width / height, 0.1, 100);
   background(0);
 
   const gl = this._renderer.GL;
   gl.disable(gl.DEPTH_TEST);
   gl.enable(gl.BLEND);
   gl.blendEquation(gl.MAX);
-  gl.lineWidth(0.5);
 
   drawShdr.bindShader();
-  drawShdr.setUniform('dataA', oldPos);
-  drawShdr.setUniform('dataB', newPos);
-  drawShdr.setUniform('N',     N);
-  drawShdr.setUniform('b',     b);
+  drawShdr.setUniform('posData',   newPos);
+  drawShdr.setUniform('b',         b);
+  drawShdr.setUniform('blockSize', BLOCK_SIZE);
   drawShdr.bindTextures();
-  gl.drawArrays(gl.LINES, 0, 2 * N);
+
+  gl.drawArrays(gl.TRIANGLES, 0, 6 * N);
+
   gl.disable(gl.BLEND);
   drawShdr.unbindTextures();
   drawShdr.unbindShader();
 
   // Swap framebuffers
   const tmp = oldPos; oldPos = newPos; newPos = tmp;
-}
-
-// ---------------------------------------------------------------------------
-// HUD
-// ---------------------------------------------------------------------------
-
-function updateHUD(idx) {
-  if (!hudEl) return;
-  if (hudNameEl)  hudNameEl.textContent  = ATTRACTOR_NAMES[idx];
-  if (hudIndexEl) hudIndexEl.textContent = `${idx + 1} / ${B_PARAMS.length}`;
-  hudEl.style.opacity = hudOpacity;
-}
-
-// ---------------------------------------------------------------------------
-// Screenshot
-// ---------------------------------------------------------------------------
-
-function keyPressed() {
-  const ts = `${month()}-${day()}_${hour()}-${minute()}-${second()}`;
-  save(`img_${ts}.jpg`);
 }
