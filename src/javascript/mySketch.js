@@ -21,7 +21,7 @@ const N         = 100000;
 const FB_WIDE   = 1024;
 const FB_HIGH   = Math.ceil(N / FB_WIDE);
 
-const BLEND_FRAMES = 60 * 8;   // 8 s cross-fade
+const BLEND_FRAMES = 60 * 2;   // 8 s cross-fade
 
 const B_PARAMS = [
   [0.17, 0.050, 37.0],   // 0  Halvorsen Web
