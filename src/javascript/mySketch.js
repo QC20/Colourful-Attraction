@@ -30,6 +30,12 @@ const B_PARAMS = [
   [0.15, 0.060, 53.0],   // 3  Modulated Lattice
   [0.19, 0.040, 43.0],   // 4  Nested Resonance
   [0.17, 0.050, 31.0],   // 5  Harmonic Overtones
+  [0.16, 0.045, 47.0],   // 6  Triaxial Weave
+  [0.18, 0.035, 38.0],   // 7  Concentric Shell
+  [0.20, 0.040, 44.0],   // 8  Recursive Fold
+  [0.22, 0.050, 35.0],   // 9  Hyperbolic Bloom
+  [0.17, 0.045, 49.0],   // 10 Phase Spiral
+  [0.18, 0.055, 33.0],   // 11 Dual Web
 ];
 
 const ATTRACTOR_NAMES = [
@@ -39,6 +45,12 @@ const ATTRACTOR_NAMES = [
   'Modulated Lattice',
   'Nested Resonance',
   'Harmonic Overtones',
+  'Triaxial Weave',
+  'Concentric Shell',
+  'Recursive Fold',
+  'Hyperbolic Bloom',
+  'Phase Spiral',
+  'Dual Web',
 ];
 
 const BLOCK_SIZE = 0.008;
