@@ -124,14 +124,32 @@ vec3 vel2(vec3 p, float b) { return sin(p.yzx * vec3(1.0, 1.7, 0.6)) - b * p; }
 vec3 vel3(vec3 p, float b) { return sin(p.yzx) * (1.0 + 0.5 * cos(p.zxy)) - b * p; }
 vec3 vel4(vec3 p, float b) { return sin(p.yzx + 0.8 * sin(p.zxy)) - b * p; }
 vec3 vel5(vec3 p, float b) { return 0.7 * sin(p.yzx) + 0.4 * sin(2.0 * p.yzx + 1.0) - b * p; }
+// sin*sin product: zero on grid planes → crystalline lattice intersections
+vec3 vel6(vec3 p, float b) { return sin(p.yzx) * sin(p.zxy) - b * p; }
+// radially-modulated: force alternates sign across concentric shells
+vec3 vel7(vec3 p, float b) { return sin(p.yzx) * cos(length(p) * 2.0) - b * p; }
+// 3-deep FM nesting: intricate fractal-like knotted filaments
+vec3 vel8(vec3 p, float b) { return sin(p.yzx + sin(p.zxy + sin(p))) - b * p; }
+// tanh saturates to ±1: smooth dense volumes instead of spidery webs
+vec3 vel9(vec3 p, float b) { return tanh(2.5 * p.yzx) - b * p; }
+// quadratic phase shift grows with position: spiraling braided arms
+vec3 vel10(vec3 p, float b) { return sin(p.yzx + 0.4 * p.zxy * p.zxy) - b * p; }
+// sum of two cyclic permutations in argument: breaks 3-fold symmetry
+vec3 vel11(vec3 p, float b) { return sin(p.yzx + p.zxy) - b * p; }
 
 vec3 vel(int t, vec3 p, float b) {
-  if      (t == 0) return vel0(p, b);
-  else if (t == 1) return vel1(p, b);
-  else if (t == 2) return vel2(p, b);
-  else if (t == 3) return vel3(p, b);
-  else if (t == 4) return vel4(p, b);
-  else             return vel5(p, b);
+  if      (t == 0)  return vel0(p, b);
+  else if (t == 1)  return vel1(p, b);
+  else if (t == 2)  return vel2(p, b);
+  else if (t == 3)  return vel3(p, b);
+  else if (t == 4)  return vel4(p, b);
+  else if (t == 5)  return vel5(p, b);
+  else if (t == 6)  return vel6(p, b);
+  else if (t == 7)  return vel7(p, b);
+  else if (t == 8)  return vel8(p, b);
+  else if (t == 9)  return vel9(p, b);
+  else if (t == 10) return vel10(p, b);
+  else              return vel11(p, b);
 }
 
 void main() {
